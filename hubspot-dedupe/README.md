@@ -35,6 +35,23 @@ node hubspot-dedupe/merge.mjs hubspot-dedupe/reports/skan-RRRR-MM-DD.csv
 node hubspot-dedupe/merge.mjs hubspot-dedupe/reports/skan-RRRR-MM-DD.csv --apply
 ```
 
+## Uruchomienie lokalnie
+
+Skrypty nie mają zależności — wystarczy Node 18+ i dostęp do `api.hubapi.com`:
+
+```bash
+git clone -b claude/hubspot-duplicate-companies-7k2vn1 \
+  https://github.com/RadicalSalesTeam/clay-mcp-server.git
+cd clay-mcp-server
+export HUBSPOT_TOKEN=pat-eu1-...
+node hubspot-dedupe/scan.mjs
+```
+
+> W sesjach Claude Code na web `api.hubapi.com` bywa zablokowany przez politykę
+> egress środowiska (`403 Host not in allowlist`). Żeby uruchamiać te skrypty
+> z sesji, dodaj `api.hubapi.com` do listy dozwolonych hostów w ustawieniach
+> środowiska.
+
 ## Jak wykrywane są duplikaty
 
 Grupowanie po dwóch kluczach:

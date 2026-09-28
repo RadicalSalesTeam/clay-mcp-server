@@ -1,0 +1,20 @@
+{
+  "name": "clay-mcp-server",
+  "version": "0.1.0",
+  "description": "Webhook receiver for notifications, part of the Clay.com <-> Claude MCP server",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

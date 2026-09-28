@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Webhook receiver for notifications, part of the Clay.com <-> Claude MCP server",
   "main": "dist/server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",

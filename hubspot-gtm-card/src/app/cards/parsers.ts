@@ -250,6 +250,16 @@ export function parseGtmModel(
   }));
 }
 
+// Pulls the "Co komunikują reklamą" sentence out of ZNANE ZNANE so it can be
+// surfaced as its own callout — paid-media activity (or its absence) is a
+// direct signal of whether the company leans on inbound/outbound, and it's
+// easy to miss buried inside the full fact paragraph.
+export function parseAdSignal(rawText: string | null | undefined): string | null {
+  const text = rawText ?? '';
+  const m = text.match(/Co komunikują reklamą[^:]*:\s*([^\n]+)/);
+  return m ? m[1].trim() : null;
+}
+
 function firstLine(s: string): string {
   const i = s.indexOf('\n');
   return i === -1 ? s : s.slice(0, i);

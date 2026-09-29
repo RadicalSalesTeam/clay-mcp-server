@@ -3,23 +3,24 @@ import {
   BarChart,
   CrmContext,
   Divider,
-  EmptyState,
   ExtensionPointApiActions,
   Flex,
   Heading,
   LoadingSpinner,
-  ProgressBar,
+  ScoreCircle,
   Stack,
   Statistics,
   StatisticsItem,
   StatisticsTrend,
   StatusTag,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
+  Tabs,
   Tag,
   Text,
   Tile,
@@ -27,8 +28,8 @@ import {
 import { hubspot } from '@hubspot/ui-extensions';
 import { useCrmProperties } from '@hubspot/ui-extensions/crm';
 import {
-  fmtMln,
   fmtPLN,
+  parseAdSignal,
   parseFinancials,
   parseGtmModel,
   parseProblemsAndValue,
@@ -52,13 +53,14 @@ const PROPERTY_NAMES = [
   'three_problems_we_solve_for_them',
   'hs_ideal_customer_profile',
   'hs_lastmodifieddate',
+  'ai_primary_level',
+  'ai_self_assessment',
+  'ai_transformation_recommendation',
 ];
 
-hubspot.extend<'crm.record.tab'>(
-  ({ context, actions }: CrmExtensionProps) => (
-    <GtmRadarCard context={context} actions={actions} />
-  ),
-);
+hubspot.extend<'crm.record.tab'>(({ context, actions }: CrmExtensionProps) => (
+  <GtmRadarCard context={context} actions={actions} />
+));
 
 function TextBlock({
   text,
@@ -79,6 +81,10 @@ function TextBlock({
   );
 }
 
+function Placeholder({ text }: { text: string }) {
+  return <Text variant="microcopy">{text}</Text>;
+}
+
 const GtmRadarCard = (_props: CrmExtensionProps) => {
   const { properties, isLoading, error } = useCrmProperties(PROPERTY_NAMES);
 
@@ -92,16 +98,11 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
 
   if (error) {
     return (
-      <EmptyState
-        title="Nie udało się wczytać danych"
-        layout="vertical"
-        imageName="api"
-      >
-        <Text>
-          Spróbuj odświeżyć stronę. Jeśli problem się powtarza, sprawdź czy
-          aplikacja ma uprawnienie do odczytu właściwości firmy.
-        </Text>
-      </EmptyState>
+      <Text>
+        Nie udało się wczytać danych. Spróbuj odświeżyć stronę. Jeśli problem
+        się powtarza, sprawdź czy aplikacja ma uprawnienie do odczytu
+        właściwości firmy.
+      </Text>
     );
   }
 
@@ -113,6 +114,7 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
     properties.three_problems_we_solve_for_them,
     properties.our_value_hypothesis_statement,
   );
+  const adSignal = parseAdSignal(properties.gtm_model);
 
   const hasAnyFinancials =
     fin.revenue != null ||
@@ -120,6 +122,41 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
     fin.margin != null ||
     fin.employees != null ||
     fin.rating != null;
+
+  // One combined chart for revenue + EBITDA: both are already in the same
+  // unit (mln zł), so grouping by color on one linear axis is the correct
+  // way to compare them — the chart API has no true dual-axis mode, and
+  // none is needed here since nothing needs a second scale.
+  const financeChartData: { rok: string; metryka: string; mlnZl: number }[] =
+    [];
+  if (fin.trend) {
+    const years = [
+      fin.trend.fromYear,
+      fin.trend.fromYear + 1,
+      fin.trend.toYear,
+    ];
+    fin.trend.values.forEach((v, i) => {
+      if (v != null) {
+        financeChartData.push({ rok: String(years[i]), metryka: 'Przychód', mlnZl: v });
+      }
+    });
+    if (fin.ebitda != null) {
+      financeChartData.push({
+        rok: String(fin.trend.toYear),
+        metryka: 'EBITDA',
+        mlnZl: fin.ebitda / 1e6,
+      });
+    }
+  } else {
+    const rok = fin.revYear || 'ostatni rok';
+    if (fin.revenue != null) {
+      financeChartData.push({ rok, metryka: 'Przychód', mlnZl: fin.revenue / 1e6 });
+    }
+    if (fin.ebitda != null) {
+      financeChartData.push({ rok, metryka: 'EBITDA', mlnZl: fin.ebitda / 1e6 });
+    }
+  }
+
   const roleRows = ROLES.filter((r) => (team.counts[r] ?? 0) > 0).sort(
     (a, b) => (team.counts[b] ?? 0) - (team.counts[a] ?? 0),
   );
@@ -128,6 +165,14 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
       seniorityRank(b.seniority) - seniorityRank(a.seniority) ||
       (b.tenureFirm ?? 0) - (a.tenureFirm ?? 0),
   );
+  const rosterCategories = Array.from(
+    new Set(sortedRoster.map((p) => p.category)),
+  );
+
+  const hasAnyAi =
+    !!properties.ai_primary_level ||
+    !!properties.ai_self_assessment ||
+    !!properties.ai_transformation_recommendation;
 
   return (
     <Stack direction="column" distance="md">
@@ -151,39 +196,6 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
         <Heading>Kondycja finansowa</Heading>
         {hasAnyFinancials ? (
           <Statistics>
-            {fin.revenue != null && (
-              <StatisticsItem
-                label={`Przychód (${fin.revYear || 'ostatni rok'})`}
-                number={
-                  fmtMln(fin.trend ? fin.trend.values[2] : fin.revenue / 1e6) ||
-                  String(fin.revenue)
-                }
-              >
-                {fin.revYoyPct && (
-                  <StatisticsTrend
-                    value={`${fin.revYoyPct} r/r`}
-                    direction={fin.revDir === 'down' ? 'decrease' : 'increase'}
-                    color={fin.revDir === 'down' ? 'red' : 'green'}
-                  />
-                )}
-              </StatisticsItem>
-            )}
-            {fin.ebitda != null && (
-              <StatisticsItem
-                label="EBITDA"
-                number={fmtMln(fin.ebitda / 1e6) || String(fin.ebitda)}
-              >
-                {fin.ebitdaYoy && (
-                  <StatisticsTrend
-                    value={`${fin.ebitdaYoy} r/r`}
-                    direction={
-                      fin.ebitdaYoy.startsWith('-') ? 'decrease' : 'increase'
-                    }
-                    color={fin.ebitdaYoy.startsWith('-') ? 'red' : 'green'}
-                  />
-                )}
-              </StatisticsItem>
-            )}
             {fin.margin != null && (
               <StatisticsItem
                 label="Marża EBITDA (wyliczona)"
@@ -203,67 +215,56 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
                 )}
               </StatisticsItem>
             )}
+            {fin.revYoyPct && (
+              <StatisticsItem label="Przychód r/r" number={fin.revYoyPct}>
+                <StatisticsTrend
+                  value={fin.revYoyPct}
+                  direction={fin.revDir === 'down' ? 'decrease' : 'increase'}
+                  color={fin.revDir === 'down' ? 'red' : 'green'}
+                />
+              </StatisticsItem>
+            )}
           </Statistics>
         ) : (
-          <EmptyState
-            title="Brak danych finansowych"
-            layout="vertical"
-            imageName="emptyStateCharts"
-            flush
-          >
-            <Text variant="microcopy">
-              Pole sales_team_summary jest puste dla tej firmy.
-            </Text>
-          </EmptyState>
+          <Placeholder text="Pole sales_team_summary jest puste dla tej firmy." />
         )}
 
         {fin.tradeCreditSafe != null && fin.tradeCreditMax != null && (
-          <ProgressBar
-            title="Kredyt kupiecki (bezpieczny)"
-            value={fin.tradeCreditSafe}
-            maxValue={fin.tradeCreditMax}
-            valueDescription={`${fmtPLN(fin.tradeCreditSafe)} z rekomendowanych maks. ${fmtPLN(fin.tradeCreditMax)}`}
-            variant="success"
-          />
+          <Flex direction="row" gap="sm" align="center">
+            <ScoreCircle
+              score={Math.round(
+                (fin.tradeCreditSafe / fin.tradeCreditMax) * 100,
+              )}
+            />
+            <Stack direction="column" distance="xs">
+              <Text format={{ fontWeight: 'demibold' }}>
+                Kredyt kupiecki (bezpieczny udział maks. limitu)
+              </Text>
+              <Text variant="microcopy">
+                {fmtPLN(fin.tradeCreditSafe)} bezpiecznie z rekomendowanych
+                maks. {fmtPLN(fin.tradeCreditMax)}
+              </Text>
+            </Stack>
+          </Flex>
         )}
 
-        {fin.trend ? (
+        {financeChartData.length > 0 ? (
           <BarChart
-            data={[
-              {
-                rok: String(fin.trend.fromYear),
-                przychod: fin.trend.values[0] ?? 0,
-              },
-              {
-                rok: String(fin.trend.fromYear + 1),
-                przychod: fin.trend.values[1] ?? 0,
-              },
-              {
-                rok: String(fin.trend.toYear),
-                przychod: fin.trend.values[2] ?? 0,
-              },
-            ]}
+            data={financeChartData}
             axes={{
               x: { field: 'rok', fieldType: 'category', label: 'Rok' },
-              y: {
-                field: 'przychod',
-                fieldType: 'linear',
-                label: 'Przychód, mln zł',
-              },
+              y: { field: 'mlnZl', fieldType: 'linear', label: 'mln zł' },
+              options: { groupFieldByColor: 'metryka' },
             }}
-            options={{ showDataLabels: true, showTooltips: true }}
+            options={{
+              title: 'Przychód i EBITDA, mln zł',
+              showLegend: true,
+              showDataLabels: true,
+              showTooltips: true,
+            }}
           />
         ) : (
-          <EmptyState
-            title="Brak trendu 3-letniego w źródle"
-            layout="vertical"
-            imageName="emptyStateCharts"
-            flush
-          >
-            <Text variant="microcopy">
-              Pole sales_team_summary nie zawiera segmentu trendu.
-            </Text>
-          </EmptyState>
+          <Placeholder text="Pole sales_team_summary nie zawiera przychodu ani EBITDA." />
         )}
       </Stack>
 
@@ -282,58 +283,62 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
               x: { field: 'rola', fieldType: 'category', label: 'Rola' },
               y: { field: 'liczba', fieldType: 'linear', label: 'Liczba osób' },
             }}
-            options={{ showDataLabels: true }}
+            options={{ title: 'Headcount wg roli', showDataLabels: true }}
           />
         ) : (
-          <EmptyState
-            title="Brak rozbicia wg ról"
-            layout="vertical"
-            imageName="contacts"
-            flush
-          >
-            <Text variant="microcopy">
-              Pole sales_team_composition jest puste dla tej firmy.
-            </Text>
-          </EmptyState>
+          <Placeholder text="Pole sales_team_composition jest puste dla tej firmy." />
         )}
 
-        {sortedRoster.length > 0 && (
-          <Table bordered density="condensed">
-            <TableHead>
-              <TableRow>
-                <TableHeader>Osoba</TableHeader>
-                <TableHeader>Rola</TableHeader>
-                <TableHeader align="right">Staż w firmie</TableHeader>
-                <TableHeader align="right">Staż w sprzedaży</TableHeader>
-                <TableHeader>Poziom</TableHeader>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {sortedRoster.map((p, i) => (
-                <TableRow key={i}>
-                  <TableCell>{p.name}</TableCell>
-                  <TableCell>{p.title}</TableCell>
-                  <TableCell align="right">
-                    {p.tenureFirm != null
-                      ? `${p.tenureFirm.toLocaleString('pl-PL', { maximumFractionDigits: 1 })} lat`
-                      : '—'}
-                  </TableCell>
-                  <TableCell align="right">
-                    {p.tenureSales != null
-                      ? `${p.tenureSales.toLocaleString('pl-PL', { maximumFractionDigits: 1 })} lat`
-                      : '—'}
-                  </TableCell>
-                  <TableCell>
-                    <StatusTag
-                      variant={p.seniority === 'director' ? 'info' : 'default'}
-                    >
-                      {SENIORITY_LABEL[p.seniority] || p.seniority}
-                    </StatusTag>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        {rosterCategories.length > 0 && (
+          <Tabs fill>
+            {rosterCategories.map((cat) => {
+              const people = sortedRoster.filter((p) => p.category === cat);
+              return (
+                <Tab key={cat} tabId={cat} title={`${cat} (${people.length})`}>
+                  <Table bordered density="condensed">
+                    <TableHead>
+                      <TableRow>
+                        <TableHeader>Osoba</TableHeader>
+                        <TableHeader>Rola</TableHeader>
+                        <TableHeader align="right">Staż w firmie</TableHeader>
+                        <TableHeader align="right">
+                          Staż w sprzedaży
+                        </TableHeader>
+                        <TableHeader>Poziom</TableHeader>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {people.map((p, i) => (
+                        <TableRow key={i}>
+                          <TableCell>{p.name}</TableCell>
+                          <TableCell>{p.title}</TableCell>
+                          <TableCell align="right">
+                            {p.tenureFirm != null
+                              ? `${p.tenureFirm.toLocaleString('pl-PL', { maximumFractionDigits: 1 })} lat`
+                              : '—'}
+                          </TableCell>
+                          <TableCell align="right">
+                            {p.tenureSales != null
+                              ? `${p.tenureSales.toLocaleString('pl-PL', { maximumFractionDigits: 1 })} lat`
+                              : '—'}
+                          </TableCell>
+                          <TableCell>
+                            <StatusTag
+                              variant={
+                                p.seniority === 'director' ? 'info' : 'default'
+                              }
+                            >
+                              {SENIORITY_LABEL[p.seniority] || p.seniority}
+                            </StatusTag>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </Tab>
+              );
+            })}
+          </Tabs>
         )}
       </Stack>
 
@@ -342,6 +347,19 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
       {/* GTM Rumsfeld matrix */}
       <Stack direction="column" distance="sm">
         <Heading>Model GTM — macierz Rumsfelda</Heading>
+        {adSignal && (
+          <Tile compact>
+            <Stack direction="column" distance="xs">
+              <Text
+                variant="microcopy"
+                format={{ fontWeight: 'demibold', textTransform: 'uppercase' }}
+              >
+                Sygnał: aktywność reklamowa (inbound/outbound)
+              </Text>
+              <Text>{adSignal}</Text>
+            </Stack>
+          </Tile>
+        )}
         {gtm.length > 0 ? (
           <Stack direction="column" distance="xs">
             {gtm.map((s) => (
@@ -351,16 +369,7 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
             ))}
           </Stack>
         ) : (
-          <EmptyState
-            title="Pole gtm_model puste"
-            layout="vertical"
-            imageName="idea"
-            flush
-          >
-            <Text variant="microcopy">
-              Model GTM nie został jeszcze wygenerowany dla tej firmy.
-            </Text>
-          </EmptyState>
+          <Placeholder text="Model GTM (gtm_model) nie został jeszcze wygenerowany dla tej firmy." />
         )}
       </Stack>
 
@@ -418,17 +427,50 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
             )}
           </Stack>
         ) : (
-          <EmptyState
-            title="Brak danych"
-            layout="vertical"
-            imageName="idea"
-            flush
-          >
-            <Text variant="microcopy">
-              Diagnoza i teza wartości nie zostały jeszcze wygenerowane dla tej
-              firmy.
-            </Text>
-          </EmptyState>
+          <Placeholder text="Diagnoza i teza wartości nie zostały jeszcze wygenerowane dla tej firmy." />
+        )}
+      </Stack>
+
+      <Divider />
+
+      {/* AI diagnosis */}
+      <Stack direction="column" distance="sm">
+        <Heading>Diagnoza AI</Heading>
+        {hasAnyAi ? (
+          <Stack direction="column" distance="sm">
+            {properties.ai_primary_level && (
+              <Statistics>
+                <StatisticsItem
+                  label="Poziom AI (primary)"
+                  number={properties.ai_primary_level}
+                />
+              </Statistics>
+            )}
+            {properties.ai_self_assessment && (
+              <Stack direction="column" distance="xs">
+                <Text
+                  variant="microcopy"
+                  format={{ fontWeight: 'demibold', textTransform: 'uppercase' }}
+                >
+                  Samoocena firmy
+                </Text>
+                <TextBlock text={properties.ai_self_assessment} />
+              </Stack>
+            )}
+            {properties.ai_transformation_recommendation && (
+              <Stack direction="column" distance="xs">
+                <Text
+                  variant="microcopy"
+                  format={{ fontWeight: 'demibold', textTransform: 'uppercase' }}
+                >
+                  Rekomendacja transformacji
+                </Text>
+                <TextBlock text={properties.ai_transformation_recommendation} />
+              </Stack>
+            )}
+          </Stack>
+        ) : (
+          <Placeholder text="Pola ai_self_assessment / ai_transformation_recommendation / ai_primary_level są jeszcze puste dla tej firmy." />
         )}
       </Stack>
 
@@ -437,7 +479,8 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
       <Text variant="microcopy">
         Źródła: gtm_model, sales_team_composition, sales_team_summary,
         our_value_hypothesis_statement, three_problems_we_solve_for_them,
-        hs_ideal_customer_profile
+        hs_ideal_customer_profile, ai_primary_level, ai_self_assessment,
+        ai_transformation_recommendation
         {properties.hs_lastmodifieddate
           ? ` · ostatnia aktualizacja: ${new Date(properties.hs_lastmodifieddate).toLocaleDateString('pl-PL', { year: 'numeric', month: 'long', day: 'numeric' })}`
           : ''}

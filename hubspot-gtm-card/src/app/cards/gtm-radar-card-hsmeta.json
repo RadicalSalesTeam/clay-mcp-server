@@ -5,7 +5,7 @@
     "name": "GTM Radar",
     "description": "GTM, finanse i struktura zespołu sprzedaży — wyłącznie z danych z pól custom firmy.",
     "entrypoint": "/app/cards/GtmRadarCard.tsx",
-    "location": "crm.record.sidebar",
+    "location": "crm.record.tab",
     "objectTypes": ["companies"]
   }
 }

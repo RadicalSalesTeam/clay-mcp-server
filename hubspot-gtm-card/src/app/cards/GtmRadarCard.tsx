@@ -40,7 +40,7 @@ import {
 
 interface CrmExtensionProps {
   context: CrmContext;
-  actions: ExtensionPointApiActions<'crm.record.sidebar'>;
+  actions: ExtensionPointApiActions<'crm.record.tab'>;
 }
 
 const PROPERTY_NAMES = [
@@ -54,7 +54,7 @@ const PROPERTY_NAMES = [
   'hs_lastmodifieddate',
 ];
 
-hubspot.extend<'crm.record.sidebar'>(
+hubspot.extend<'crm.record.tab'>(
   ({ context, actions }: CrmExtensionProps) => (
     <GtmRadarCard context={context} actions={actions} />
   ),

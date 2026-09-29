@@ -1,5 +1,6 @@
 import {
   Accordion,
+  AutoGrid,
   BarChart,
   CrmContext,
   Divider,
@@ -9,9 +10,6 @@ import {
   LoadingSpinner,
   ScoreCircle,
   Stack,
-  Statistics,
-  StatisticsItem,
-  StatisticsTrend,
   StatusTag,
   Tab,
   Table,
@@ -27,7 +25,9 @@ import {
 } from '@hubspot/ui-extensions';
 import { hubspot } from '@hubspot/ui-extensions';
 import { useCrmProperties } from '@hubspot/ui-extensions/crm';
+import type { ReactNode } from 'react';
 import {
+  fmtMln,
   fmtPLN,
   parseAdSignal,
   parseFinancials,
@@ -85,6 +85,44 @@ function Placeholder({ text }: { text: string }) {
   return <Text variant="microcopy">{text}</Text>;
 }
 
+// A compact horizontal stat tile — replaces the built-in Statistics
+// component, which renders its items stacked in a single vertical column
+// rather than a row/grid. Tile has no built-in "big number" text size, so
+// the value is just bold body text rather than an oversized figure.
+function StatTile({
+  label,
+  value,
+  trendText,
+  trendUp,
+  caption,
+}: {
+  label: string;
+  value: string;
+  trendText?: string;
+  trendUp?: boolean;
+  caption?: string;
+}) {
+  return (
+    <Tile compact>
+      <Stack direction="column" distance="xs">
+        <Text
+          variant="microcopy"
+          format={{ textTransform: 'uppercase', fontWeight: 'demibold' }}
+        >
+          {label}
+        </Text>
+        <Text format={{ fontWeight: 'bold' }}>{value}</Text>
+        {trendText && (
+          <StatusTag variant={trendUp ? 'success' : 'danger'}>
+            {trendUp ? '▲' : '▼'} {trendText}
+          </StatusTag>
+        )}
+        {caption && <Text variant="microcopy">{caption}</Text>}
+      </Stack>
+    </Tile>
+  );
+}
+
 const GtmRadarCard = (_props: CrmExtensionProps) => {
   const { properties, isLoading, error } = useCrmProperties(PROPERTY_NAMES);
 
@@ -116,45 +154,58 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
   );
   const adSignal = parseAdSignal(properties.gtm_model);
 
-  const hasAnyFinancials =
-    fin.revenue != null ||
-    fin.ebitda != null ||
-    fin.margin != null ||
-    fin.employees != null ||
-    fin.rating != null;
-
-  // One combined chart for revenue + EBITDA: both are already in the same
-  // unit (mln zł), so grouping by color on one linear axis is the correct
-  // way to compare them — the chart API has no true dual-axis mode, and
-  // none is needed here since nothing needs a second scale.
-  const financeChartData: { rok: string; metryka: string; mlnZl: number }[] =
-    [];
-  if (fin.trend) {
-    const years = [
-      fin.trend.fromYear,
-      fin.trend.fromYear + 1,
-      fin.trend.toYear,
-    ];
-    fin.trend.values.forEach((v, i) => {
-      if (v != null) {
-        financeChartData.push({ rok: String(years[i]), metryka: 'Przychód', mlnZl: v });
-      }
-    });
-    if (fin.ebitda != null) {
-      financeChartData.push({
-        rok: String(fin.trend.toYear),
-        metryka: 'EBITDA',
-        mlnZl: fin.ebitda / 1e6,
-      });
-    }
-  } else {
-    const rok = fin.revYear || 'ostatni rok';
-    if (fin.revenue != null) {
-      financeChartData.push({ rok, metryka: 'Przychód', mlnZl: fin.revenue / 1e6 });
-    }
-    if (fin.ebitda != null) {
-      financeChartData.push({ rok, metryka: 'EBITDA', mlnZl: fin.ebitda / 1e6 });
-    }
+  // Revenue and EBITDA are shown separately, not on one shared axis: EBITDA
+  // is typically 5-40% of revenue, so on a single linear scale its bar
+  // shrinks to an unreadable sliver next to the revenue bars.
+  const finTiles: ReactNode[] = [];
+  if (fin.revenue != null) {
+    finTiles.push(
+      <StatTile
+        key="revenue"
+        label={`Przychód (${fin.revYear || 'ostatni rok'})`}
+        value={
+          fmtMln(fin.trend ? fin.trend.values[2] : fin.revenue / 1e6) ||
+          String(fin.revenue)
+        }
+        trendText={fin.revYoyPct ? `${fin.revYoyPct} r/r` : undefined}
+        trendUp={fin.revDir !== 'down'}
+      />,
+    );
+  }
+  if (fin.ebitda != null) {
+    finTiles.push(
+      <StatTile
+        key="ebitda"
+        label="EBITDA"
+        value={fmtMln(fin.ebitda / 1e6) || String(fin.ebitda)}
+        trendText={fin.ebitdaYoy ? `${fin.ebitdaYoy} r/r` : undefined}
+        trendUp={fin.ebitdaYoy ? !fin.ebitdaYoy.startsWith('-') : undefined}
+      />,
+    );
+  }
+  if (fin.margin != null) {
+    finTiles.push(
+      <StatTile
+        key="margin"
+        label="Marża EBITDA (wyliczona)"
+        value={`${fin.margin.toLocaleString('pl-PL', { maximumFractionDigits: 1 })}%`}
+      />,
+    );
+  }
+  if (fin.employees != null) {
+    finTiles.push(
+      <StatTile key="employees" label="Zatrudnienie" value={`${fin.employees} osób`} />,
+    );
+  }
+  if (fin.rating) {
+    finTiles.push(
+      <StatTile
+        key="rating"
+        label="Rating wiarygodności"
+        value={fin.rating}
+        caption={fin.ratingLabel ?? undefined}
+      />,
+    );
   }
 
   const roleRows = ROLES.filter((r) => (team.counts[r] ?? 0) > 0).sort(
@@ -194,37 +245,10 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
       {/* Financials */}
       <Stack direction="column" distance="sm">
         <Heading>Kondycja finansowa</Heading>
-        {hasAnyFinancials ? (
-          <Statistics>
-            {fin.margin != null && (
-              <StatisticsItem
-                label="Marża EBITDA (wyliczona)"
-                number={`${fin.margin.toLocaleString('pl-PL', { maximumFractionDigits: 1 })}%`}
-              />
-            )}
-            {fin.employees != null && (
-              <StatisticsItem
-                label="Zatrudnienie"
-                number={`${fin.employees} osób`}
-              />
-            )}
-            {fin.rating && (
-              <StatisticsItem label="Rating wiarygodności" number={fin.rating}>
-                {fin.ratingLabel && (
-                  <Text variant="microcopy">{fin.ratingLabel}</Text>
-                )}
-              </StatisticsItem>
-            )}
-            {fin.revYoyPct && (
-              <StatisticsItem label="Przychód r/r" number={fin.revYoyPct}>
-                <StatisticsTrend
-                  value={fin.revYoyPct}
-                  direction={fin.revDir === 'down' ? 'decrease' : 'increase'}
-                  color={fin.revDir === 'down' ? 'red' : 'green'}
-                />
-              </StatisticsItem>
-            )}
-          </Statistics>
+        {finTiles.length > 0 ? (
+          <AutoGrid columnWidth={150} gap="sm" flexible>
+            {finTiles}
+          </AutoGrid>
         ) : (
           <Placeholder text="Pole sales_team_summary jest puste dla tej firmy." />
         )}
@@ -248,23 +272,38 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
           </Flex>
         )}
 
-        {financeChartData.length > 0 ? (
+        {fin.trend ? (
           <BarChart
-            data={financeChartData}
+            data={[
+              {
+                rok: String(fin.trend.fromYear),
+                przychod: fin.trend.values[0] ?? 0,
+              },
+              {
+                rok: String(fin.trend.fromYear + 1),
+                przychod: fin.trend.values[1] ?? 0,
+              },
+              {
+                rok: String(fin.trend.toYear),
+                przychod: fin.trend.values[2] ?? 0,
+              },
+            ]}
             axes={{
               x: { field: 'rok', fieldType: 'category', label: 'Rok' },
-              y: { field: 'mlnZl', fieldType: 'linear', label: 'mln zł' },
-              options: { groupFieldByColor: 'metryka' },
+              y: {
+                field: 'przychod',
+                fieldType: 'linear',
+                label: 'Przychód, mln zł',
+              },
             }}
             options={{
-              title: 'Przychód i EBITDA, mln zł',
-              showLegend: true,
+              title: 'Przychód, mln zł',
               showDataLabels: true,
               showTooltips: true,
             }}
           />
         ) : (
-          <Placeholder text="Pole sales_team_summary nie zawiera przychodu ani EBITDA." />
+          <Placeholder text="Pole sales_team_summary nie zawiera trendu 3-letniego przychodu." />
         )}
       </Stack>
 
@@ -439,12 +478,12 @@ const GtmRadarCard = (_props: CrmExtensionProps) => {
         {hasAnyAi ? (
           <Stack direction="column" distance="sm">
             {properties.ai_primary_level && (
-              <Statistics>
-                <StatisticsItem
+              <AutoGrid columnWidth={150} gap="sm" flexible>
+                <StatTile
                   label="Poziom AI (primary)"
-                  number={properties.ai_primary_level}
+                  value={properties.ai_primary_level}
                 />
-              </Statistics>
+              </AutoGrid>
             )}
             {properties.ai_self_assessment && (
               <Stack direction="column" distance="xs">

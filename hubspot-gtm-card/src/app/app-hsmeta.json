@@ -1,0 +1,22 @@
+{
+  "uid": "gtm_radar_app",
+  "type": "app",
+  "config": {
+    "description": "GTM Radar — pokazuje handlowcom dane GTM, finanse i strukturę zespołu sprzedaży prospekta na rekordzie Company.",
+    "name": "GTM Radar",
+    "distribution": "private",
+    "auth": {
+      "type": "static",
+      "requiredScopes": [
+        "crm.objects.companies.read"
+      ],
+      "optionalScopes": [],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": [],
+      "iframe": [],
+      "img": []
+    }
+  }
+}

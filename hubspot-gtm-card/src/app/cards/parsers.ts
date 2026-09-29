@@ -254,10 +254,168 @@ export function parseGtmModel(
 // surfaced as its own callout — paid-media activity (or its absence) is a
 // direct signal of whether the company leans on inbound/outbound, and it's
 // easy to miss buried inside the full fact paragraph.
-export function parseAdSignal(rawText: string | null | undefined): string | null {
+export function parseAdSignal(
+  rawText: string | null | undefined,
+): string | null {
   const text = rawText ?? '';
   const m = text.match(/Co komunikują reklamą[^:]*:\s*([^\n]+)/);
   return m ? m[1].trim() : null;
+}
+
+export function parsePostsSignal(
+  rawText: string | null | undefined,
+): string | null {
+  const text = rawText ?? '';
+  const m = text.match(/Co mówią posty[^:]*:\s*([^\n]+)/);
+  return m ? m[1].trim() : null;
+}
+
+export interface AdChannels {
+  google: number | null;
+  linkedin: number | null;
+  meta: number | null;
+  creatives: string[];
+}
+
+// null = channel not established in the source ("nieustalone", or the hits
+// belonged to a different company) — distinct from an explicit 0.
+export function parseAdChannels(adSignal: string | null): AdChannels {
+  const text = adSignal ?? '';
+  const n = (re: RegExp): number | null => {
+    const m = text.match(re);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  const creatives = Array.from(text.matchAll(/„([^"”„]{8,})["”]/g)).map((m) =>
+    m[1].trim(),
+  );
+  return {
+    google: n(/Google\s+(\d+)/),
+    linkedin: n(/LinkedIn\s+(\d+)/),
+    meta: n(/Meta\s+(\d+)/),
+    creatives,
+  };
+}
+
+// Maturity level shared by RST and AI diagnoses: "1–2" -> 1, "L3" -> 3.
+export function firstLevel(s: string | null | undefined): number | null {
+  const m = (s ?? '').match(/(\d)/);
+  if (!m) return null;
+  const v = parseInt(m[1], 10);
+  return v >= 1 && v <= 5 ? v : null;
+}
+
+export const AI_DIMENSION_LABELS: Record<string, string> = {
+  lead_generation: 'Generowanie leadów',
+  crm_intelligence: 'Wiedza o kliencie w CRM',
+  deal_progression: 'Postęp szans sprzedaży',
+  tool_utilization: 'Wykorzystanie narzędzi',
+  process_consistency: 'Powtarzalność (zależność od lidera)',
+  founder_dependency: 'Powtarzalność (zależność od lidera)',
+};
+
+export interface AiDimension {
+  key: string;
+  level: number;
+  note: string | null;
+  detail: string | null;
+}
+
+export interface AiAssessment {
+  overall: string | null;
+  dimensions: AiDimension[];
+  gaps: AiDimension[];
+}
+
+function dimKey(label: string): string {
+  return label.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+// ai_self_assessment comes in two generations of the survey output:
+// new ("- lead_generation: L2 / Mixed approach\n<detail>") with all five
+// dimensions, and old ("Overall Level: L2 ... Gaps: x at L3 - ...") with
+// gaps only. Both carry a gaps list, so that is parsed for either format.
+export function parseAiAssessment(
+  rawText: string | null | undefined,
+): AiAssessment {
+  const text = rawText ?? '';
+  const overall =
+    (text.match(/Overall (?:score|Level)[:\s]*L?([\d.]+)/i) || [])[1] ?? null;
+
+  const dimensions: AiDimension[] = [];
+  const dimRe =
+    /^-\s*([a-z_]+):\s*L(\d)\s*\/\s*([^\n]+)(?:\n(?!\s*-|\s*$)([^\n]+))?/gm;
+  let m: RegExpExecArray | null;
+  while ((m = dimRe.exec(text)) !== null) {
+    dimensions.push({
+      key: m[1],
+      level: parseInt(m[2], 10),
+      note: m[3].trim(),
+      detail: m[4] ? m[4].trim() : null,
+    });
+  }
+
+  const gaps: AiDimension[] = [];
+  const gapsSection = text.match(/gaps:\s*([\s\S]*)$/i);
+  if (gapsSection) {
+    const body = gapsSection[1];
+    const hits = Array.from(
+      body.matchAll(/([A-Za-z_]+(?:[ _][A-Za-z]+)?) at L(\d)/g),
+    );
+    hits.forEach((h, i) => {
+      const start = (h.index ?? 0) + h[0].length;
+      const end =
+        i + 1 < hits.length ? (hits[i + 1].index ?? body.length) : body.length;
+      const note = body
+        .slice(start, end)
+        .replace(/^\s*-\s*/, '')
+        .replace(/[\s,-]+$/, '')
+        .trim();
+      gaps.push({
+        key: dimKey(h[1]),
+        level: parseInt(h[2], 10),
+        note: note || null,
+        detail: null,
+      });
+    });
+  }
+
+  return { overall, dimensions, gaps };
+}
+
+export interface AiRecommendation {
+  headline: string | null;
+  horizon: string | null;
+  currentState: string | null;
+  constraints: string | null;
+  foundation: string[];
+}
+
+export function parseAiRecommendation(
+  rawText: string | null | undefined,
+): AiRecommendation {
+  const text = (rawText ?? '').trim();
+  const first = text.split('\n')[0]?.trim() ?? '';
+  const headline =
+    first && !/^current state/i.test(first)
+      ? first.replace(/\s*\([^)]*\)\s*$/, '')
+      : null;
+  const horizon = (first.match(/\(([^()]*\d\s*mo)\)/) || [])[1] ?? null;
+  const currentState =
+    (text.match(/current state:\s*\n?([^\n]+)/i) || [])[1]?.trim() ?? null;
+  const constraints =
+    (text.match(/constraints:\s*\n?([^\n]+)/i) || [])[1]?.trim() ?? null;
+  const fw = (text.match(/foundation work:\s*([\s\S]+)$/i) || [])[1] ?? '';
+  const foundation = fw
+    .split(/\n\s*-\s+|\s+-\s+(?=[A-Z])|\.,\s*(?=[A-Z])/)
+    .map((s) => s.replace(/^\s*-\s*/, '').trim())
+    .filter((s) => s.length > 3);
+  return { headline, horizon, currentState, constraints, foundation };
+}
+
+// Source titles already carry their own "P1." / "P1 " prefix; the card adds
+// its own P-badge, so strip it to avoid "P1 P1. ..."
+export function stripPIndex(title: string | null): string | null {
+  return title ? title.replace(/^P\d\.?\s*/, '') : null;
 }
 
 function firstLine(s: string): string {

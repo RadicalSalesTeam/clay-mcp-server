@@ -1,20 +1,30 @@
-"""Niezależna weryfikacja wymiarów: odczyt geometrii z PDF (pdfplumber), przeliczenie pt -> mm."""
+"""Niezależna weryfikacja wymiarów: odczyt geometrii z PDF (pdfplumber), przeliczenie pt -> mm.
+
+Użycie: python3 weryfikuj_v4.py [plik.pdf] [SX] [SY] - SX/SY to korekta drukarki zapisana w PDF;
+wymiary są przeliczane na mm "po wydruku".
+"""
+import sys
 import pdfplumber
 from collections import defaultdict
 
+FILE = sys.argv[1] if len(sys.argv) > 1 else "szablon_otwory_v4_A4_x2.pdf"
+SX = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
+SY = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 PT = 25.4 / 72
-pdf = pdfplumber.open("szablon_otwory_v4_A4_x2.pdf")
+PX, PY = PT / SX, PT / SY
+pdf = pdfplumber.open(FILE)
 p = pdf.pages[0]
-print(f"Strona: {p.width*PT:.2f} x {p.height*PT:.2f} mm")
+print(f"Strona PDF: {p.width*PT:.2f} x {p.height*PT:.2f} mm, korekta X {SX:.4f} Y {SY:.4f}")
 H = p.height
 
 # środki wierceń = środki poziomych ramion krzyżyków o długości 8 mm
-drills = sorted({(round((l['x0'] + l['x1']) / 2 * PT, 2), round((H - l['top']) * PT, 2))
-                 for l in p.lines if abs(l['top'] - l['bottom']) < 1e-6 and abs((l['x1'] - l['x0']) * PT - 8) < 0.01})
+ARM = {(round((l['x1'] - l['x0']) * PX, 2)) for l in p.lines}
+drills = sorted({(round((l['x0'] + l['x1']) / 2 * PX, 2), round((H - l['top']) * PY, 2))
+                 for l in p.lines if abs(l['top'] - l['bottom']) < 1e-6 and round((l['x1'] - l['x0']) * PX, 2) in (5.0, 8.0)})
 # kontury cięcia = zamknięte ścieżki
 
 def bbox(o):
-    return (o['x0'] * PT, (H - o['bottom']) * PT, o['x1'] * PT, (H - o['top']) * PT)
+    return (o['x0'] * PX, (H - o['bottom']) * PY, o['x1'] * PX, (H - o['top']) * PY)
 
 ok = True
 def check(name, val, exp, tol=0.02):
@@ -26,7 +36,7 @@ def check(name, val, exp, tol=0.02):
 rows = defaultdict(list)
 for x, y in drills:
     rows[y].append(x)
-axes = (157.5, 52.5)
+axes = (round(H * PY * 3 / 4, 2), round(H * PY / 4, 2))
 objs = [o for o in p.curves] + [r for r in p.rects]
 for n, ax in enumerate(axes, 1):
     print(f"Szablon {n} (oś y={ax} mm):")
@@ -46,7 +56,7 @@ for n, ax in enumerate(axes, 1):
     check("prostokąt symetryczny względem osi", (rect[1] + rect[3]) / 2, ax)
     # wypustki: punkty konturu na wysokości y = ±19
     r_obj = max([o for o in objs if ax - 30 < (bbox(o)[1] + bbox(o)[3]) / 2 < ax + 30], key=lambda o: o['x1'] - o['x0'])
-    pts = [(x * PT, (H - y) * PT if False else y * PT) for x, y in r_obj['pts']]
+    pts = [(x * PX, (H - y) * PY) for x, y in r_obj['pts']]
     ys = sorted({round(y, 2) for _, y in pts})
     tab_top = [x for x, y in pts if abs(y - max(ys)) < 0.01]
     body = sorted(ys)[-2]
@@ -61,5 +71,18 @@ for n, ax in enumerate(axes, 1):
         check(f"prostokąt -> gniazdo {k}", b[0] - rect[2], 20)
     check("odstęp między gniazdami (brzeg-brzeg)", wl[1][1] - wl[0][3], 10)
     check("para gniazd symetryczna względem osi", (wl[0][1] + wl[1][3]) / 2, ax)
-    print(f"  marginesy: lewy krzyżyk {top[0]-4:.1f} mm, prawy {p.width*PT - wl[0][2]:.1f} mm")
+    for b in wl:
+        o = [o for o in p.curves if abs(bbox(o)[1] - b[1]) < 0.01 and abs(bbox(o)[0] - b[0]) < 0.01][0]
+        q = [(x * PX, (H - y) * PY) for x, y in o['pts']]
+        tp, bt, lf = max(y for _, y in q), min(y for _, y in q), min(x for x, _ in q)
+        nt = [x for x, y in q if abs(y - tp) < 0.01]
+        check("gniazdo: szerokość wypustu", max(nt) - min(nt), 8.1)
+        check("gniazdo: wysokość korpusu", max(y for x, y in q if abs(x - lf) < 0.01) - bt, 13.8)
+    print(f"  marginesy po wydruku: lewe wiercenie {top[0]:.1f} mm, prawa krawędź gniazd {p.width*PX - wl[0][2]:.1f} mm")
+EXP_H, EXP_V = (250, 100) if SX != 1 else (100, 50)
+hl = min((l for l in p.lines if abs(l['top'] - l['bottom']) < 1e-6), key=lambda l: abs((l['x1'] - l['x0']) * PX - EXP_H))
+vl = min((l for l in p.lines if abs(l['x0'] - l['x1']) < 1e-6), key=lambda l: abs((l['bottom'] - l['top']) * PY - EXP_V))
+print("Odcinki kontrolne:")
+check("poziomy", (hl['x1'] - hl['x0']) * PX, EXP_H)
+check("pionowy", (vl['bottom'] - vl['top']) * PY, EXP_V)
 print("\nWYNIK:", "WSZYSTKO ZGODNE" if ok else "SĄ BŁĘDY")
